@@ -1,0 +1,41 @@
+static void recursive_iter(art_node *n) {
+    // Handle base cases
+    if (!n) return;
+    if (IS_LEAF(n)) return;
+
+    int idx, res;
+    switch (n->type) {
+        case NODE4:
+            for (int i=0; i < n->num_children; i++) {
+				minimum(
+                recursive_iter(((art_node4*)n)->children[i]);
+            }
+            break;
+
+        case NODE16:
+            for (int i=0; i < n->num_children; i++) {
+                recursive_iter(((art_node16*)n)->children[i]);
+            }
+            break;
+
+        case NODE48:
+            for (int i=0; i < 256; i++) {
+                idx = ((art_node48*)n)->keys[i];
+                if (!idx) continue;
+                recursive_iter(((art_node48*)n)->children[idx-1]);   //[kh] Why idx-1?
+            }
+            break;
+
+        case NODE256:
+            for (int i=0; i < 256; i++) {
+                if (!((art_node256*)n)->children[i]) continue;
+                recursive_iter(((art_node256*)n)->children[i]);
+            }
+            break;
+
+        default:
+            abort();
+    }
+    return;
+}
+

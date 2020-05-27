@@ -1,0 +1,339 @@
+#include "memcached.h"
+			 
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/signal.h>
+#include <sys/resource.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include <pthread.h>
+#include <strings.h>
+#include <emmintrin.h>
+
+#define mfence() asm volatile("mfence":::"memory")
+
+unsigned long IN_count = 0;
+unsigned long LN_count = 0;
+unsigned long clflush_count = 0;
+unsigned long mfence_count = 0;
+
+
+typedef  unsigned long  int  ub4;   /* unsigned 4-byte quantities */
+typedef  unsigned       char ub1;   /* unsigned 1-byte quantities */
+
+/* how many powers of 2's worth of buckets we use */
+/* [KH] These three lines are actually not used, however, don't remove those. There are some dependency somewhere else. */
+unsigned int hashpower = HASHPOWER_DEFAULT;
+#define hashsize(n) ((ub4)1<<(n))
+#define hashmask(n) (hashsize(n)-1)
+
+
+/* added by [KH] */
+#include <string.h>
+#include <malloc.h>
+#include <time.h>
+#include <x86intrin.h>
+#include <stdint.h>
+#include <sys/time.h>
+
+#define mfence() asm volatile("mfence":::"memory")
+#define LATENCY			200
+#define CPU_FREQ_MHZ	2400
+
+static inline void cpu_pause()
+{
+	__asm__ volatile ("pause" ::: "memory");
+}
+
+static inline unsigned long read_tsc(void)
+{
+	unsigned long var;
+	unsigned int hi, lo;
+
+	asm volatile ("rdtsc" : "=a" (lo), "=d" (hi));
+	var = ((unsigned long long int) hi << 32) | lo;
+
+	return var;
+}
+
+void flush_buffer(void *buf, unsigned long len, bool fence)
+{
+	unsigned long i;
+	len = len + ((unsigned long)(buf) & (CACHE_LINE_SIZE - 1));
+	if (fence) {
+		mfence();
+		for (i = 0; i < len; i += CACHE_LINE_SIZE) {
+			clflush_count++;
+//			etsc = read_tsc() + (unsigned long)(LATENCY * CPU_FREQ_MHZ / 1000);
+			asm volatile ("clflush %0\n" : "+m" (*(char *)((unsigned long)buf+i)));
+//			while (read_tsc() < etsc)
+//				cpu_pause();
+		}
+		mfence();
+		mfence_count = mfence_count + 2;
+	} else {
+		for (i = 0; i < len; i += CACHE_LINE_SIZE) {
+			clflush_count++;
+//			etsc = read_tsc() + (unsigned long)(LATENCY * CPU_FREQ_MHZ / 1000);
+			asm volatile ("clflush %0\n" : "+m" (*(char *)((unsigned long)buf+i)));
+//			while (read_tsc() < etsc)
+//				cpu_pause();
+		}
+	}
+}
+
+void flush_buffer_nocount(void *buf, unsigned long len, bool fence)
+{
+     unsigned long i;
+     len = len + ((unsigned long)(buf) & (CACHE_LINE_SIZE - 1));
+     if (fence) {
+         mfence();
+         for (i = 0; i < len; i += CACHE_LINE_SIZE)
+             asm volatile ("clflush %0\n" : "+m" (*(char *)(buf+i)));
+         mfence();
+     } else {
+         for (i = 0; i < len; i += CACHE_LINE_SIZE)
+             asm volatile ("clflush %0\n" : "+m" (*(char *)(buf+i)));
+     }
+}
+ 
+static inline int max(int a, int b) {
+     return (a > b) ? a : b;
+}
+ 
+key_item *make_key_item(unsigned char *key, int key_len)
+{
+     key_item *new_key = malloc(sizeof(key_item) + key_len);
+     new_key->key_len = key_len;
+     memcpy(new_key->key, key, key_len);
+ 
+     flush_buffer(new_key, sizeof(key_item) + key_len, false);
+ 
+    return new_key;
+}
+
+void assoc_init(const int hashtable_init) {  /*[KH] The variable "hashtable_init" is not used as real */
+   printf("1\n");
+   	T = (art_tree *)malloc(sizeof(art_tree));
+	art_tree_init(T);
+	printf("2\n");
+}
+
+
+item *assoc_find(const char *_key, const size_t nkey) { //ok	//ok
+	//printf("[assoc_find]\n");
+	unsigned char *key = (unsigned char *)_key;
+    art_node **child;
+    art_node *n = T->root;
+    int prefix_len, depth = 0;
+    while (n) {
+        // Might be a leaf
+        if (IS_ITEM(n)) {	/* [kh] I changed "art_leaf" to "item" */
+            n = (art_node*)ITEM_RAW(n);
+            // Check if the expanded path matches
+            if (!item_matches((item*)n, key, nkey, depth)) {
+                return (item*)n;
+            }
+            return NULL;
+        }
+
+        // Bail if the prefix does not match
+        if (n->partial_len) {
+            prefix_len = check_prefix(n, key, nkey, depth);
+            if (prefix_len != min(MAX_PREFIX_LEN, n->partial_len))
+                return NULL;
+            depth = depth + n->partial_len;
+        }
+
+        // Recursively search
+		
+        child = find_child(n, key[depth]);
+        n = (child) ? *child : NULL;
+        depth++;
+    }
+    return NULL;
+}
+
+
+int assoc_insert(item *it) {	//ok	//ok
+    void *old = recursive_insert(T->root, &T->root, it, 0);
+    if (!old) 
+    {
+        return 1;
+    } else 
+    {
+        printf("[assoc_insert] fail!!\n");
+        exit(1);
+    }
+}
+
+
+void assoc_delete(const char *key, const size_t nkey) {			//ok
+    item *deleted_it = recursive_delete(T->root, &T->root, (unsigned char *)key, nkey, 0);
+    if (deleted_it) {
+       //  T->size--;
+       // free(deleted_it);
+        return;
+    } else {
+		printf("[assoc_delete] Maybe failed! There is no deleted item!!\n");
+		exit(1);
+	}
+}
+
+
+
+void *allocINode(unsigned long num)
+{   
+     IN *new_INs = calloc(num, sizeof(IN));
+     IN_count = num;
+     return (void *)new_INs;
+}
+
+/* Alloc non-volatile leaf node */
+LN *allocLNode()
+{
+     LN *new_LN = calloc(1, sizeof(LN));
+     flush_buffer(new_LN, sizeof(LN), false);
+     LN_count++;
+     return new_LN;
+}
+
+tree *initTree()
+{
+     tree *t = calloc(1, sizeof(tree));
+     return t;
+}
+
+
+int binary_search_IN(unsigned char *key, int key_len, IN *node)
+{   
+     int low = 0, mid = 0, high = (node->nKeys - 1);
+     int len, decision;
+     
+     while (low <= high) {
+         mid = (low + high) / 2;
+         len = max((node->key[mid])->key_len, key_len);
+         decision = memcmp((node->key[mid])->key, key, len);
+         if (decision > 0)
+             high = mid - 1; 
+         else if (decision < 0)
+             low = mid + 1;
+         else
+             break;
+     }
+    
+     if (low > mid)
+         mid = low;
+    
+     return mid;
+}
+ 
+int binary_search_PLN(unsigned char *key, int key_len, PLN *node)
+{
+     int low = 0, mid = 0, high = (node->nKeys - 1);
+     int len, decision;
+ 
+     while (low <= high) {
+         mid = (low + high) / 2;
+         len = max((node->entries[mid].key)->key_len, key_len);
+         decision = memcmp((node->entries[mid].key)->key, key, len);
+         if (decision > 0)
+             high = mid - 1;
+         else if (decision < 0)
+             low = mid + 1;
+         else
+             break;
+     }
+
+	if (low > mid)
+         mid = low;
+
+    return mid;
+}
+ 
+LN *find_leaf(tree *t, unsigned char *key, int key_len)
+{
+     unsigned int pos, id, i;
+     IN *current_IN;
+     PLN *current_PLN;
+     LN *current_LN;
+ 
+     if (t->is_leaf == 2) {
+         id = 0;
+ 
+         current_IN = (IN *)t->root;
+ 
+         while (id < t->first_PLN_id) {
+             pos = binary_search_IN(key, key_len, &current_IN[id]);
+             /* MAX_NUM_ENTRY_IN = 2m + 1 */
+             id = id * (MAX_NUM_ENTRY_IN)+ 1 + pos;
+         }
+ 
+         current_PLN = (PLN *)t->root;
+ 
+         pos = binary_search_PLN(key, key_len, &current_PLN[id]);
+ 
+         if (pos < current_PLN[id].nKeys)
+             return current_PLN[id].entries[pos].ptr;
+         else
+             return NULL;
+     } else if (t->is_leaf == 1) {
+         current_PLN = (PLN *)t->root;
+ 
+         pos = binary_search_PLN(key, key_len, &current_PLN[0]);
+ 
+		if (pos < current_PLN[0].nKeys)
+             return current_PLN[0].entries[pos].ptr;
+        else
+             return NULL;
+     } else {
+         current_LN = (LN *)t->root;
+         return current_LN;
+     }   
+}   
+
+
+int search_leaf_node(LN *node, unsigned char *key, int key_len)
+{
+     int i, pos;
+ 
+     for (i = 0; i < node->nElements; i++) {
+         if (memcmp((node->LN_Element[i].key)->key, key, max((node->LN_Element[i].key)->key_len, key_len)) == 0 &&
+                 node->LN_Element[i].flag == true) {
+             pos = i;
+             return pos;
+         }
+ 
+         if (memcmp((node->LN_Element[i].key)->key, key, max((node->LN_Element[i].key)->key_len, key_len)) == 0 &&
+                 node->LN_Element[i].flag == false) {
+             pos = -1;
+             return pos;
+         }
+     }
+     return -1;
+}
+ 
+void *Lookup(tree *t, unsigned char *key, int key_len)
+{
+     int pos, i;
+     LN *current_LN;
+     IN *current_IN = t->root;
+ 
+     current_LN = find_leaf(t, key, key_len);
+     if (current_LN == NULL)
+ 		 goto fail;
+
+     pos = search_leaf_node(current_LN, key, key_len);
+     if (pos < 0)
+         goto fail;
+ 
+     return current_LN->LN_Element[pos].value;
+fail:
+    return;
+}
+

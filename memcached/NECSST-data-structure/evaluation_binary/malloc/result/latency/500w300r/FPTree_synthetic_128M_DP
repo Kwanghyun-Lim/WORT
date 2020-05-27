@@ -1,0 +1,33 @@
+Turbo Boost disabled for all CPUs
+/home/sekwon/study/quartz/scripts/../build/src/lib/libnvmemul.so
+/home/sekwon/study/quartz/scripts/../nvmemul.ini
+2
+Insertion Time = 377249395245 ns
+
+
+===== STATISTICS (Sun Sep 11 17:58:02 2016) =====
+
+PID: 5243
+Initialization duration: 1516155 usec
+Running threads: 0
+Terminated threads: 1
+
+== Running threads == 
+
+== Terminated threads == 
+	Thread id [5243]
+		: cpu id: 0
+		: spawn timestamp: 976096634
+		: termination timestamp: 1382917369
+		: execution time: 406820735 usecs
+		: stall cycles: 91989361200
+		: NVM accesses: 283917781
+		: latency calculation overhead cycles: 0
+		: injected delay cycles: 35332931178
+		: injected delay in usec: 14715923
+		: longest epoch duration: 37610 usec
+		: shortest epoch duration: 12 usec
+		: average epoch duration: 52 usec
+		: number of epochs: 7507026
+		: epochs which didn't reach min duration: 0
+		: static epochs requested: 7507026

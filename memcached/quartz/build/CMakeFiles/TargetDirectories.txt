@@ -1,0 +1,6 @@
+/home/q/new_proj/quartz/build/src/lib/cpu/CMakeFiles/cpu.dir
+/home/q/new_proj/quartz/build/src/dev/CMakeFiles/dev_build.dir
+/home/q/new_proj/quartz/build/bench/memlat/CMakeFiles/memlat.dir
+/home/q/new_proj/quartz/build/bench/multilat/CMakeFiles/multilat.dir
+/home/q/new_proj/quartz/build/bench/new_memlat/CMakeFiles/new_memlat.dir
+/home/q/new_proj/quartz/build/src/lib/CMakeFiles/nvmemul.dir

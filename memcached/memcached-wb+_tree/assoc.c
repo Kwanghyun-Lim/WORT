@@ -1,0 +1,601 @@
+/* -*- Mode: C; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*- */
+/*
+ * Hash table
+ *
+ * The hash function used here is by Bob Jenkins, 1996:
+ *    <http://burtleburtle.net/bob/hash/doobs.html>
+ *       "By Bob Jenkins, 1996.  bob_jenkins@burtleburtle.net.
+ *       You may use this code any way you wish, private, educational,
+ *       or commercial.  It's free."
+ *
+ * The rest of the file is licensed under the BSD license.  See LICENSE.
+ */
+
+#include "memcached.h"
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/signal.h>
+#include <sys/resource.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include <pthread.h>
+#include <stdbool.h>
+
+typedef  unsigned long  int  ub4;   /* unsigned 4-byte quantities */
+typedef  unsigned       char ub1;   /* unsigned 1-byte quantities */
+
+
+/* how many powers of 2's worth of buckets we use */
+/* [KH] These three lines are actually not used, however, don't remove those. There are some dependency somewhere else. */
+unsigned int hashpower = HASHPOWER_DEFAULT;
+#define hashsize(n) ((ub4)1<<(n))
+#define hashmask(n) (hashsize(n)-1)
+
+
+/* added by [KH] */
+#include <malloc.h>
+#include <sys/time.h>
+#include <stdint.h>
+#include <time.h>
+#include <x86intrin.h>
+/*			    */
+
+#define mfence() asm volatile("mfence":::"memory")
+#define sfence() asm volatile("sfence":::"memory")
+
+void flush_buffer(void *buf, unsigned long len, bool fence)
+{
+	/*
+	unsigned long i;
+	len = len + ((unsigned long)(buf) & (CACHE_LINE_SIZE - 1));
+	if (fence) {
+		//		mfence();
+		for (i = 0; i < len; i += CACHE_LINE_SIZE)
+			asm volatile ("clflush %0\n" : "+m" (*(char *)((unsigned long)buf+i)));
+		sfence();
+	} else {
+		for (i = 0; i < len; i += CACHE_LINE_SIZE)
+			asm volatile ("clflush %0\n" : "+m" (*(char *)((unsigned long)buf+i)));
+	}
+	*/
+}
+
+
+/* W_B+_TREE */
+static tree *T;
+
+void add_redo_logentry(void)
+{
+	redo_log_entry *log = malloc(sizeof(redo_log_entry));
+	log->addr = 0;
+	log->new_value = 0;
+	log->type = LE_DATA;
+	flush_buffer(log, sizeof(redo_log_entry), false);
+}
+
+void add_commit_entry(void)
+{
+	commit_entry *commit_log = malloc(sizeof(commit_entry));
+	commit_log->type = LE_COMMIT;
+	flush_buffer(commit_log, sizeof(commit_entry), true);
+}
+
+node *allocNode(void)
+{
+	node *n = malloc(sizeof(node));
+	memset(n->slot,0,8);
+	n->isleaf = 1;
+	return n;
+}
+
+
+int Append(node *n, unsigned long key, void *value)  //ok
+{
+	int checkBit = (1 << 8) - 1;
+	int j, missingMin = 0;
+
+	for (j = 1; j <= n->slot[0]; j++)
+		checkBit ^= (1 << n->slot[j]);
+
+	while ((checkBit % 2) == 0) {
+		checkBit = checkBit >> 1;
+		missingMin++;
+	}
+
+	n->entries[missingMin].key = key;
+	n->entries[missingMin].ptr = value;		//sekwon
+
+	return missingMin; 
+}
+
+int Append_in_inner(node *n, unsigned long key, void *value) //ok
+{
+	int checkBit = (1 << 8) - 1;
+	int j, missingMin = 0;
+
+	for (j = 1; j <= n->slot[0]; j++)
+		checkBit ^= (1 << n->slot[j]);
+
+	while ((checkBit % 2) == 0) {
+		checkBit = checkBit >> 1;
+		missingMin++;
+	}
+
+	n->entries[missingMin].key = key;
+	n->entries[missingMin].ptr = value;
+	return missingMin;
+}
+
+int Search_link(node *curr, char *temp, unsigned long key, char *valid)  //ok
+{
+	int low = 1, mid = 1;
+	int high = temp[0];
+	*valid = 0;
+
+	while (low <= high){
+		mid = (low + high) / 2;
+		if (curr->entries[(int)temp[mid]].key > key)
+			high = mid - 1;
+		else if (curr->entries[(int)temp[mid]].key < key)
+			low = mid + 1;
+		else {
+			*valid = 1;
+			break;
+		}
+	}
+
+	if (low > mid) 
+		mid = low;
+
+	return mid;
+}
+
+int Search(node *curr, char *temp, unsigned long key)  //ok
+{
+	int low = 1, mid = 1;
+	int high = temp[0];
+
+	while (low <= high){
+		mid = (low + high) / 2;
+		if (curr->entries[(int)temp[mid]].key > key)
+			high = mid - 1;
+		else if (curr->entries[(int)temp[mid]].key < key)
+			low = mid + 1;
+		else
+			break;
+	}
+
+	if (low > mid) 
+		mid = low;
+
+	return mid;
+}
+
+node *find_leaf_node(node *curr, unsigned long key){  //ok
+	int loc;
+
+	if (curr->isleaf) 
+		return curr;
+	loc = Search(curr, curr->slot, key);
+
+	if (loc > curr->slot[0]) 
+		return find_leaf_node(curr->entries[(int)curr->slot[loc - 1]].ptr, key);
+	else if (curr->entries[(int)curr->slot[loc]].key <= key) 
+		return find_leaf_node(curr->entries[(int)curr->slot[loc]].ptr, key);
+	else if (loc == 1) 
+		return find_leaf_node(curr->leftmostPtr, key);
+	else 
+		return find_leaf_node(curr->entries[(int)curr->slot[loc - 1]].ptr, key);
+}
+
+
+void insert_in_parent(tree *t, node *curr, unsigned long key, node *splitNode) {
+	if (curr == t->root) {
+		node *root = allocNode();
+		root->isleaf = 0;
+		root->leftmostPtr = curr;
+		root->entries[0].ptr = splitNode;
+		root->entries[0].key = key;
+		splitNode->parent = root;
+
+		root->slot[1] = 0;
+		root->slot[0] = 1;
+		flush_buffer(root, sizeof(node), false);
+		flush_buffer(splitNode, sizeof(node), false);
+
+		add_redo_logentry();
+		curr->parent = root;
+		//		add_redo_logentry();
+		t->root = root;
+		return ;
+	}
+
+	node *parent = curr->parent;
+
+	if (parent->slot[0] < NODE_SIZE) {
+		int mid, j, loc;
+		char temp[8];
+
+		loc = Append_in_inner(parent, key, splitNode);
+		flush_buffer(&(parent->entries[loc]), sizeof(entry), false);
+		splitNode->parent = parent;
+		flush_buffer(splitNode, sizeof(node), false);
+
+		mid = Search(parent, parent->slot, key);
+
+		for (j = parent->slot[0]; j >= mid; j--)
+			temp[j+1] = parent->slot[j];
+
+		temp[mid] = loc;
+
+		for (j = mid-1; j >= 1; j--)
+			temp[j] = parent->slot[j];
+
+		temp[0] = parent->slot[0]+1;
+
+		add_redo_logentry();
+		*((uint64_t *)parent->slot) = *((uint64_t *)temp);
+	}
+	else {
+		int j, loc, cp = parent->slot[0];
+		node *splitParent = allocNode();
+		splitParent->isleaf = 0;
+
+		for (j = min_live_entries ; j > 0; j--) {
+			loc = Append_in_inner(splitParent,parent->entries[(int)parent->slot[cp]].key, parent->entries[(int)parent->slot[cp]].ptr);
+			node *child = parent->entries[(int)parent->slot[cp]].ptr;
+			add_redo_logentry();
+			child->parent = splitParent;
+			splitParent->slot[j] = loc;
+			splitParent->slot[0]++;
+			cp--;
+		}
+
+		add_redo_logentry();
+		parent->slot[0] -= min_live_entries;
+
+		if (splitParent->entries[(int)splitParent->slot[1]].key > key) {
+			add_redo_logentry();
+			loc = insert_in_inner_noflush(parent, key, splitNode);
+			flush_buffer(&(parent->entries[loc]), sizeof(entry), false);
+			splitNode->parent = parent;
+			flush_buffer(splitNode, sizeof(node), false);
+		}
+		else {
+			splitNode->parent = splitParent;
+			flush_buffer(splitNode, sizeof(node), false);
+			insert_in_inner_noflush(splitParent, key, splitNode);
+		}
+
+		insert_in_parent(t, parent, 
+				splitParent->entries[(int)splitParent->slot[1]].key, splitParent);
+	}
+}
+
+
+void insert_in_inner(node *curr, unsigned long key, void *value)
+{
+	int mid, j, loc;
+	char temp[8];
+
+	loc = Append_in_inner(curr, key, value);
+	flush_buffer(&(curr->entries[loc]), sizeof(entry), true);
+
+	mid = Search(curr, curr->slot, key);
+
+	for (j = curr->slot[0]; j >= mid; j--)
+		temp[j+1] = curr->slot[j];
+
+	temp[mid] = loc;
+
+	for (j = mid-1; j >= 1; j--)
+		temp[j] = curr->slot[j];
+
+	temp[0] = curr->slot[0] + 1;
+
+	*((uint64_t *)curr->slot) = *((uint64_t *)temp);
+	flush_buffer(curr->slot, 8, true);
+}
+
+int insert_in_inner_noflush(node *curr, unsigned long key, void *value) //ok
+{
+	int mid, j, loc;
+	char temp[8];
+
+	loc = Append_in_inner(curr, key, value);
+
+	mid = Search(curr, curr->slot, key);
+
+	for( j=curr->slot[0]; j>=mid; j-- )
+		temp[j+1] = curr->slot[j];
+
+	temp[mid] = loc;
+
+	for( j=mid-1; j>=1; j-- )
+		temp[j] = curr->slot[j];
+
+	temp[0] = curr->slot[0]+1;
+
+	*((uint64_t *)curr->slot) = *((uint64_t *)temp);
+
+	return loc;
+}
+
+
+
+
+
+int insert_in_leaf_noflush(node *curr, unsigned long key, void *value) //ok
+{
+	char temp[8];
+	int loc, mid, j;
+
+	loc = Append(curr, key, value);
+	mid = Search(curr, curr->slot, key);
+
+	for (j = curr->slot[0]; j >= mid; j--)
+		temp[j + 1] = curr->slot[j];
+
+	temp[mid] = loc;
+
+	for (j = mid-1; j >= 1; j--)
+		temp[j] = curr->slot[j];
+
+	temp[0] = curr->slot[0] + 1;
+
+	*((uint64_t *)curr->slot) = *((uint64_t *)temp);
+
+	return loc;
+}
+
+
+void insert_in_leaf(node *curr, unsigned long key, void *value)
+{
+	char temp[8];
+	int loc, mid, j;
+	char valid;
+
+	mid = Search_link(curr, curr->slot, key, &valid);
+	if (valid == 1) {
+		((item *)value)->h_next = (item *)curr->entries[(int)curr->slot[mid]].ptr;
+		curr->entries[(int)curr->slot[mid]].ptr = value;
+		flush_buffer(&(curr->entries[(int)curr->slot[mid]]), sizeof(entry), true);
+		return;
+	}
+
+	loc = Append(curr, key, value);
+
+	flush_buffer(&(curr->entries[loc]), sizeof(entry), true);
+
+	//	mid = Search(curr, curr->slot, key);
+
+	for (j = curr->slot[0]; j >= mid; j--)
+		temp[j+1] = curr->slot[j];
+
+	temp[mid] = loc;
+
+	for (j = mid-1; j >= 1; j--)
+		temp[j] = curr->slot[j];
+
+	temp[0] = curr->slot[0] + 1;
+
+	*((uint64_t *)curr->slot) = *((uint64_t *)temp);
+	flush_buffer(curr->slot, 8, true);
+}
+
+
+
+tree *initTree(void) //ok
+{
+	tree *t =malloc(sizeof(tree)); 
+	t->root = allocNode(); 
+	t->height = 0;
+	return t;
+}
+
+
+void assoc_init(const int hashtable_init) {//ok  /*[KH] The variable "hashtable_init" is not used as real */
+	T = initTree();
+
+	//printf("[assoc_init] initTree done!\n");
+
+	if (! T) {
+		fprintf(stderr, "Failed to init w_b+_tree.\n");
+		exit(EXIT_FAILURE);
+	}
+}
+
+
+int assoc_insert(item *it, const uint32_t hv) { //ok
+	unsigned long key = hv;
+	tree *t = T;
+	void *value = (void *)it;
+
+	int numEntries, loc;
+	node *curr = t->root;
+	/* Find proper leaf */
+	curr = find_leaf_node(curr, key);  ///
+
+	if (curr->slot[0] != 0) {
+		loc = Search(curr, curr->slot, key);
+
+		if (loc > curr->slot[0]) 
+			loc = curr->slot[0];
+
+		/* Check overflow & split */
+		numEntries = curr->slot[0];
+
+		if (numEntries == NODE_SIZE && curr->entries[(int)curr->slot[loc]].key != key) {
+			node *splitNode = allocNode();
+			int j, loc, cp = curr->slot[0];
+			splitNode->leftmostPtr = curr->leftmostPtr;
+
+			//overflown node
+			for (j = min_live_entries; j > 0; j--) {
+				loc = Append(splitNode, curr->entries[(int)curr->slot[cp]].key, 
+						curr->entries[(int)curr->slot[cp]].ptr); ///
+				splitNode->slot[j] = loc;
+				splitNode->slot[0]++;
+				cp--;
+			}
+
+			add_redo_logentry();
+			curr->slot[0] -= min_live_entries;
+
+			if (splitNode->entries[(int)splitNode->slot[1]].key > key) {
+				add_redo_logentry();	//slot redo logging for insert_in_leaf_noflush
+				loc = insert_in_leaf_noflush(curr, key, value); ///
+				flush_buffer(&(curr->entries[loc]), sizeof(entry), false);
+			}
+			else
+				insert_in_leaf_noflush(splitNode, key, value); ///
+
+			insert_in_parent(t, curr, splitNode->entries[(int)splitNode->slot[1]].key, splitNode);
+			add_redo_logentry();
+			curr->leftmostPtr = splitNode;
+			sfence();
+			add_commit_entry();
+		}
+		else
+			insert_in_leaf(curr, key, value);
+	} else {
+
+		/* Check overflow & split */
+		numEntries = curr->slot[0];
+
+		if (numEntries == NODE_SIZE) {
+			node *splitNode = allocNode();
+			int j, loc, cp = curr->slot[0];
+			splitNode->leftmostPtr = curr->leftmostPtr;
+
+			//overflown node
+			for (j = min_live_entries; j > 0; j--) {
+				loc = Append(splitNode, curr->entries[(int)curr->slot[cp]].key, 
+						curr->entries[(int)curr->slot[cp]].ptr); ///
+				splitNode->slot[j] = loc;
+				splitNode->slot[0]++;
+				cp--;
+			}
+
+			add_redo_logentry();
+			curr->slot[0] -= min_live_entries;
+
+			if (splitNode->entries[(int)splitNode->slot[1]].key > key) {
+				add_redo_logentry();	//slot redo logging for insert_in_leaf_noflush
+				loc = insert_in_leaf_noflush(curr, key, value); ///
+				flush_buffer(&(curr->entries[loc]), sizeof(entry), false);
+			}
+			else
+				insert_in_leaf_noflush(splitNode, key, value); ///
+
+			insert_in_parent(t, curr, splitNode->entries[(int)splitNode->slot[1]].key, splitNode);
+			add_redo_logentry();
+			curr->leftmostPtr = splitNode;
+			sfence();
+			add_commit_entry();
+		}
+		else
+			insert_in_leaf(curr, key, value);
+	}
+
+	//printf("[assoc_insert] Done!\n");
+
+	return 1;
+}
+
+
+
+item *assoc_find(const char *_key, const size_t nkey, const uint32_t hv) {
+	unsigned long key = hv;
+	tree *t = T;
+
+	node *curr = t->root;
+	curr = find_leaf_node(curr, key);
+
+	if (curr->slot[0] == 0)
+		return NULL;
+
+	int loc = Search(curr, curr->slot, key);
+
+	if (loc > curr->slot[0]) 
+		loc = curr->slot[0];
+
+	if (curr->entries[(int)curr->slot[loc]].key != key || loc > curr->slot[0]) {
+		//printf("[assoc_find] return NULL Done!\n");
+		return NULL;
+	}
+	/*[KH] here */
+	item *it = (item *)curr->entries[(int)curr->slot[loc]].ptr;
+	item *ret = NULL;
+	int depth = 0;
+
+	while (it) {
+		if ((nkey == it->nkey) && (memcmp(_key, ITEM_key(it), nkey) == 0)) {
+			ret = it;
+			break;
+		}
+		it = it->h_next;
+		++depth;
+	}
+
+	return ret;
+}
+
+static item** _hashitem_before(const char *key, const size_t nkey, const uint32_t hv, void **value) {
+	item **pos = (item**)value;
+
+	while (*pos && ((nkey != (*pos)->nkey) || memcmp(key, ITEM_key(*pos), nkey))) {
+		pos = &(*pos)->h_next;
+	}
+	return pos;
+}
+
+
+void assoc_delete(const char *_key, const size_t nkey, const uint32_t hv) {
+	unsigned long key = hv;
+	int j;
+	tree *t = T;
+	char temp[8];
+
+	node *curr = t->root;
+	curr = find_leaf_node(curr, key);
+	int loc = Search(curr, curr->slot, key);
+
+	if (loc > curr->slot[0]) 
+		loc = curr->slot[0];
+
+	if (curr->entries[(int)curr->slot[loc]].key != key || loc > curr->slot[0]) {
+		//printf("[assoc_find] return NULL Done!\n");
+		assert((item *)curr->entries[(int)curr->slot[loc]].ptr != 0);
+	}
+
+	//	printf("loc = %d\n", loc);
+	//	for (j = 1; j <= curr->slot[0]; j++)
+	//		printf("curr->slot[%d] = %hhu\n", j, curr->slot[j]);
+
+	item **before = _hashitem_before(_key, nkey, hv, &curr->entries[(int)curr->slot[loc]].ptr);
+	if (*before) {
+		item *nxt;
+		nxt = (*before)->h_next;
+		(*before)->h_next = 0;
+		*before = nxt;
+		if (curr->entries[(int)curr->slot[loc]].ptr == NULL) {
+			for (j = loc - 1; j > 0; j--)
+				temp[j] = curr->slot[j];
+			for (j = curr->slot[0]; j > loc; j--)
+				temp[j - 1] = curr->slot[j];
+
+			temp[0] = curr->slot[0] - 1;
+
+			*((uint64_t *)curr->slot) = *((uint64_t *)temp);
+			flush_buffer(curr->slot, 8, true);
+		}
+		return;
+	}
+	assert(*before != 0);
+}

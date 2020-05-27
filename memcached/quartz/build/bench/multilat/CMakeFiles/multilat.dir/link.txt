@@ -1,0 +1,1 @@
+/usr/bin/cc      CMakeFiles/multilat.dir/multilat.c.o  -o multilat -rdynamic ../../src/lib/libnvmemul.so -lpthread -ldl -lconfig -lnuma -lrt -lm -lgomp -Wl,-rpath,/home/q/new_proj/quartz/build/src/lib 

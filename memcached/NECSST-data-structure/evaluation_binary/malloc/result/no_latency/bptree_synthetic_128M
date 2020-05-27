@@ -1,0 +1,11 @@
+Insertion Time = 104487009984 ns
+sizeof(LN) = 1056
+sizeof(IN) = 2080
+Total space = 3103144032 byte
+Space efficiency = 24
+IN count = 33021
+LN count = 2873542
+Search Time = 109148425309 ns
+Range scan 0.1% = 2114824 ns
+Range scan 1% = 19914565 ns
+Range scan 10% = 210105145 ns

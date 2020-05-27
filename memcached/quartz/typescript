@@ -1,0 +1,40 @@
+Script started on Thu 08 Sep 2016 03:20:48 PM KST
+]0;sekwon@memcached1:~/study/quartz[?1034h[sekwon@memcached1 quartz]$ scripts
+bash: scripts: command not found
+]0;sekwon@memcached1:~/study/quartz[sekwon@memcached1 quartz]$ cd scripts
+]0;sekwon@memcached1:~/study/quartz/scripts[sekwon@memcached1 scripts]$ ls
+[0m[01;32minstall.sh[0m  [01;32mrunenv.sh[0m  [01;32msetupdev.sh[0m  [01;32mturboboost.sh[0m
+[m]0;sekwon@memcached1:~/study/quartz/scripts[sekwon@memcached1 scripts]$ vi runenv.sh 
+[?1000h[?1049h[?1h=[2;1H▽[6n[2;1H  [1;1H[1;35r[?12;25h[?12l[?25h[27m[m[H[2J[?25l[35;1H"runenv.sh" 53L, 1830C[>c[1;1H[1m[33m  1 [m[1m[36m#################################################################[m
+[1m[33m  2 [m[1m[36m#Copyright 2016 Hewlett Packard Enterprise Development LP.  [m
+[1m[33m  3 [m[1m[36m#This program is free software; you can redistribute it and/or modify[m
+[1m[33m  4 [m[1m[36m#it under the terms of the GNU General Public License as published by[m
+[1m[33m  5 [m[1m[36m#the Free Software Foundation; either version 2 of the License, or (at[m
+[1m[33m  6 [m[1m[36m#your option) any later version. This program is distributed in the[m
+[1m[33m  7 [m[1m[36m#hope that it will be useful, but WITHOUT ANY WARRANTY; without even[m
+[1m[33m  8 [m[1m[36m#the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR[m
+[1m[33m  9 [m[1m[36m#PURPOSE. See the GNU General Public License for more details. You[m
+[1m[33m 10 [m[1m[36m#should have received a copy of the GNU General Public License along[m
+[1m[33m 11 [m[1m[36m#with this program; if not, write to the Free Software Foundation,[m
+[1m[33m 12 [m[1m[36m#Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.[m
+[1m[33m 13 [m[1m[36m#################################################################[m
+[1m[33m 14 [m[1m[36m#!/bin/bash[m
+[1m[33m 15 
+ 16 [m[1m[36mNVM_EMUL_PATH[m=[1m[33m"[m[1m[31m`dirname [m[1m[34m$0[m[1m[31m`[m[1m[35m/..[m[1m[33m"
+ 17 
+ 18 
+ 19 if [[m [1m[33m-z[m [1m[33m"[m[1m[34m$1[m[1m[33m"[m [1m[33m][m; [1m[33mthen
+ 20 [m    [1m[33mecho[m[1m[35m [m[1m[33m"[m[1m[35mrunenv.sh [cmd to run][m[1m[33m"
+ 21 [m    [1m[33mexit[m [1m[35m1[m
+[1m[33m 22 fi
+ 23 
+ 24 [m[1m[36mrootdir[m=[1m[33m"[m[1m[34m$NVM_EMUL_PATH[m[1m[33m"
+ 25 [m[1m[36mbindir[m=[1m[34m$rootdir[m[1m[33m"[m[1m[35m/build[m[1m[33m"
+ 26 
+ 27 if [[m [1m[33m-f[m /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor [1m[33m][m; [1m[33mthen
+ 28 [m    [1m[36mcurrent_scaling[m=[1m[34m$([m[1m[31mcat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor[m[1m[34m)[m[29;1H[1m[33m 29 
+ 30 [m    [1m[33mif [[m [1m[33m"[m[1m[34m${current_scaling}[m[1m[33m"[m [1m[33m!=[m [1m[33m"[m[1m[35mperformance[m[1m[33m"[m [1m[33m][m; [1m[33mthen
+ 31 [m[8C[1m[36mfile_list[m=[1m[34m$([m[1m[33mls[m[1m[31m /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor[m[1m[34m)[m
+[1m[33m 32 [8Cfor[m cpu_file [1m[33min[m [1m[34m${file_list}[m; [1m[33mdo
+ 33 [12Cecho[m[1m[35m [m[1m[33m"[m[1m[35mperformance[m[1m[33m"[m[1m[35m [m| sudo tee [1m[34m${cpu_file}[m [1m[33m>[m /dev/null
+[1m[33m 34 [8Cdone[m[35;67H1,1[11CTop[35;67H   [11C   [1;5H[?12l[?25h[?1000l[?1002h[?25l[35;67H2,1[11CTop[2;5H[?12l[?25h[?25l[35;67H3[3;5H[?12l[?25h[?25l[35;67H4[4;5H[?12l[?25h[?25l[35;67H5[5;5H[?12l[?25h[?25l[35;67H6[6;5H[?12l[?25h[?25l[35;67H7[7;5H[?12l[?25h[?25l[35;67H8[8;5H[?12l[?25h[?25l[35;67H9[9;5H[?12l[?25h[?25l[35;67H10,1[10;5H[?12l[?25h[?25l[35;68H1[11;5H[?12l[?25h[?25l[35;68H2[12;5H[?12l[?25h[?25l[35;68H3[13;5H[?12l[?25h[?25l[35;68H4[14;5H[?12l[?25h[?25l[35;68H5,0-1[15;5H[?12l[?25h[?25l[35;68H6,1  [16;5H[?12l[?25h[?25l[35;68H7,0-1[17;5H[?12l[?25h[?25l[35;68H8[18;5H[?12l[?25h[?25l[35;68H9,1  [19;5H[?12l[?25h
